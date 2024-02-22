@@ -1,0 +1,162 @@
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Private/ScreenPass.ush"
+
+SCREEN_PASS_TEXTURE_VIEWPORT(ViewParams)
+
+SamplerState InputSampler;
+Texture2D SceneColor;
+Texture2D InputTexture;
+Texture2D<uint2> InputStencilTexture;
+float4 Color;
+
+float2 PosToUV(float2 Pos) 
+{
+	float2 ViewportUV = ((Pos - ViewParams_ViewportMin.xy) * ViewParams_ViewportSizeInverse.xy);
+	return ViewportUV * ViewParams_UVViewportSize + ViewParams_UVViewportMin;
+}
+
+void UVMaskMainPS(
+	float4 SvPosition : SV_POSITION, 
+	out float4 UVMask : SV_Target0, 
+	out float4 CopyColor : SV_Target1
+) 
+{
+	uint2 stencil = InputStencilTexture.Load(uint3(SvPosition.xy, 0));
+	float2 UV = PosToUV(SvPosition.xy);
+	if (stencil.y == 5) 
+	{
+		UVMask = float4(UV.x, UV.y, 0, 0.2);
+		
+	} else 
+	{
+		UVMask = float4(0, 0, 0, 0);
+	}
+
+	CopyColor = SceneColor.SampleLevel(InputSampler, UV, 0);
+	//comment/uncomment to control whether this is a postFX shader or not
+	UVMask = CopyColor;
+}
+
+float4 averageColourAndStandardDeviation(float2 startingKernelPosition,float sectorRadius, float2 UV)
+{
+	//Retrieve texel size
+	float2 texelSize = float2(1/ViewParams_ViewportSize.x, 1/ViewParams_ViewportSize.y);
+	
+	float4 averagePixelColour = float4(0.0f, 0.0f, 0.0f, 0.0f);
+	float4 standardDeviation = float4(0.0f, 0.0f, 0.0f, 0.0f);
+	float numOfPixelsSampled = 0.0f;
+	float finalStandardDeviation = 0.0f;
+	
+	//find sum of and standard deviation of pixel colours in kernel sector
+	for (int y = startingKernelPosition.y ; y <= startingKernelPosition.y + sectorRadius; y++)
+	{
+		for (int x = startingKernelPosition.x; x <= startingKernelPosition.x + sectorRadius; x++)
+		{
+			float2 offset = float2(x,y) * texelSize;
+			float4 currentPixelColour = Texture2DSample(InputTexture, InputSampler, UV + offset);
+			averagePixelColour += currentPixelColour;
+			standardDeviation += currentPixelColour * currentPixelColour;
+			numOfPixelsSampled++;
+		}
+	}
+	averagePixelColour /= numOfPixelsSampled;
+	standardDeviation = standardDeviation/numOfPixelsSampled - averagePixelColour * averagePixelColour;
+	finalStandardDeviation = standardDeviation.r + standardDeviation.g + standardDeviation.b;
+	
+	//return average pixel colour and standard deviation
+	return float4(averagePixelColour.r, averagePixelColour.g, averagePixelColour.b, finalStandardDeviation);
+}
+
+float4 CombineMainPS(float4 SvPosition : SV_POSITION) : SV_Target0 
+{
+	float2 UV = PosToUV(SvPosition.xy);
+	float4 inputTextureSample = Texture2DSample(InputTexture, InputSampler, UV);
+	
+	//Retrieve texel size
+	float2 texelSize = float2(1/ViewParams_ViewportSize.x, 1/ViewParams_ViewportSize.y);
+	
+	//-------------------------------------------------------------------------------------------------
+	//KUWAHARA FILTER
+	
+	int KuwaharaStrength = 11;
+	
+	//ensures kernel is always an odd number so current pixel is always centred in kernel
+	if (KuwaharaStrength % 2 == 0)
+	{
+		KuwaharaStrength -= 1;
+	}
+	int KernelSize = KuwaharaStrength * KuwaharaStrength;
+	//takes into account counting from 0 
+	float elementsPerRowInKernel = KuwaharaStrength - 1;
+	
+	//split kernel into 4 sectors
+	float sectorRadius = elementsPerRowInKernel/2; 
+	
+	//requires different starting pixel offsets for each of the 4 sections
+	float2 startingOffsetOne = float2(-sectorRadius, -sectorRadius);
+	float2 startingOffsetTwo = float2(0, -sectorRadius);
+	float2 startingOffsetThree = float2(-sectorRadius, 0);
+	float2 startingOffsetFour = float2(0, 0);
+	
+	//Calculate average colour and standard deviation of each kernel sector
+	float4 sectorOneResult = averageColourAndStandardDeviation(startingOffsetOne, sectorRadius, UV);
+	float4 sectorTwoResult = averageColourAndStandardDeviation(startingOffsetTwo, sectorRadius, UV);
+	float4 sectorThreeResult = averageColourAndStandardDeviation(startingOffsetThree, sectorRadius, UV);
+	float4 sectorFourResult = averageColourAndStandardDeviation(startingOffsetFour, sectorRadius, UV);
+	float4 sectorResults[4] = {sectorOneResult, sectorTwoResult, sectorThreeResult, sectorFourResult};
+	
+	//Find the kernel sector with the lowest standard deviation
+	float4 lowestStandardDeviationSector = sectorOneResult;
+	float numOfResults = 4;
+	for (int i = 1; i < numOfResults; i++)
+	{
+		if(sectorResults[i].w < lowestStandardDeviationSector.w)
+		{
+			lowestStandardDeviationSector = sectorResults[i];
+		}
+	}
+	 //Use the average pixel colour of the sector with the lowest standard deviation
+	float4 KuwaharaColour = float4(lowestStandardDeviationSector.r, lowestStandardDeviationSector.g, lowestStandardDeviationSector.b, 1.0f);
+	
+	//---------------------------------------------------------------------------------------------------
+	//CHROMATIC ABERRATION
+
+	//Shift UVs of red and green channels of input texture
+	float2 newRedTexCoord = float2(UV.x + 0.003, UV.y);
+	float2 newGreenTexCoord = float2 (UV.x + 0.005, UV.y);
+	float2 newBlueTexCoord = float2(UV.x + 0.007, UV.y);
+	
+	float4 redTexture = Texture2DSample(InputTexture, InputSampler, newRedTexCoord);
+	float4 greenTexture = Texture2DSample(InputTexture, InputSampler, newGreenTexCoord);
+	float4 blueTexture = Texture2DSample(InputTexture, InputSampler, newBlueTexCoord);
+	
+	float redChannel = redTexture.r;
+	float greenChannel = greenTexture.g;
+	float blueChannel = blueTexture.b;
+	
+	//Make new float4 combining each new altered colour channel
+	float4 chromaticAberrationColour = float4(redChannel, greenChannel, blueChannel, 1);
+	
+	//---------------------------------------------------------------------------------------------------
+	//COMBINE CHROMATIC ABERRATION AND KUWAHARA FILTER
+	
+	//Control how much of each postFX you get by altering their weightings
+	float chromaticAberrationWeighting = 0.5f;
+	float kuwaharaWeighting = 1.0f - chromaticAberrationWeighting;
+	
+	//finalColour is a combination of chromatic aberration and the Kuwahara filter
+	//float4 finalColour = chromaticAberrationWeighting * chromaticAberrationColour +  kuwaharaWeighting * KuwaharaColour;
+	
+	//Just Kuwahara filter
+	float4 finalColour = KuwaharaColour;
+	
+	if (KuwaharaStrength > 0)
+	{
+		return finalColour;
+	}
+	
+	//returns original image without post processing 
+	return Texture2DSample(InputTexture, InputSampler, UV);
+	
+}
