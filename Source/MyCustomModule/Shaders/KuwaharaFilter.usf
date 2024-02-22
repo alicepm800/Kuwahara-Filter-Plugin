@@ -34,7 +34,7 @@ void UVMaskMainPS(
 	}
 
 	CopyColor = SceneColor.SampleLevel(InputSampler, UV, 0);
-	//comment/uncomment to control whether this is a postFX shader or not
+	//Comment/uncomment to control whether this is a postFX shader or not
 	UVMask = CopyColor;
 }
 
@@ -48,7 +48,7 @@ float4 averageColourAndStandardDeviation(float2 startingKernelPosition,float sec
 	float numOfPixelsSampled = 0.0f;
 	float finalStandardDeviation = 0.0f;
 	
-	//find sum of and standard deviation of pixel colours in kernel sector
+	//Find sum of and standard deviation of pixel colours in kernel sector
 	for (int y = startingKernelPosition.y ; y <= startingKernelPosition.y + sectorRadius; y++)
 	{
 		for (int x = startingKernelPosition.x; x <= startingKernelPosition.x + sectorRadius; x++)
@@ -64,7 +64,7 @@ float4 averageColourAndStandardDeviation(float2 startingKernelPosition,float sec
 	standardDeviation = standardDeviation/numOfPixelsSampled - averagePixelColour * averagePixelColour;
 	finalStandardDeviation = standardDeviation.r + standardDeviation.g + standardDeviation.b;
 	
-	//return average pixel colour and standard deviation
+	//Return average pixel colour and standard deviation
 	return float4(averagePixelColour.r, averagePixelColour.g, averagePixelColour.b, finalStandardDeviation);
 }
 
@@ -81,19 +81,19 @@ float4 CombineMainPS(float4 SvPosition : SV_POSITION) : SV_Target0
 	
 	int KuwaharaStrength = 11;
 	
-	//ensures kernel is always an odd number so current pixel is always centred in kernel
+	//Ensures kernel is always an odd number so current pixel is always centred in kernel
 	if (KuwaharaStrength % 2 == 0)
 	{
 		KuwaharaStrength -= 1;
 	}
 	int KernelSize = KuwaharaStrength * KuwaharaStrength;
-	//takes into account counting from 0 
+	//Takes into account counting from 0 
 	float elementsPerRowInKernel = KuwaharaStrength - 1;
 	
-	//split kernel into 4 sectors
+	//Split kernel into 4 sectors
 	float sectorRadius = elementsPerRowInKernel/2; 
 	
-	//requires different starting pixel offsets for each of the 4 sections
+	//Requires different starting pixel offsets for each of the 4 sections
 	float2 startingOffsetOne = float2(-sectorRadius, -sectorRadius);
 	float2 startingOffsetTwo = float2(0, -sectorRadius);
 	float2 startingOffsetThree = float2(-sectorRadius, 0);
@@ -119,36 +119,9 @@ float4 CombineMainPS(float4 SvPosition : SV_POSITION) : SV_Target0
 	 //Use the average pixel colour of the sector with the lowest standard deviation
 	float4 KuwaharaColour = float4(lowestStandardDeviationSector.r, lowestStandardDeviationSector.g, lowestStandardDeviationSector.b, 1.0f);
 	
-	//---------------------------------------------------------------------------------------------------
-	//CHROMATIC ABERRATION
-
-	//Shift UVs of red and green channels of input texture
-	float2 newRedTexCoord = float2(UV.x + 0.003, UV.y);
-	float2 newGreenTexCoord = float2 (UV.x + 0.005, UV.y);
-	float2 newBlueTexCoord = float2(UV.x + 0.007, UV.y);
+	//-------------------------------------------------------------------------------------------------
 	
-	float4 redTexture = Texture2DSample(InputTexture, InputSampler, newRedTexCoord);
-	float4 greenTexture = Texture2DSample(InputTexture, InputSampler, newGreenTexCoord);
-	float4 blueTexture = Texture2DSample(InputTexture, InputSampler, newBlueTexCoord);
-	
-	float redChannel = redTexture.r;
-	float greenChannel = greenTexture.g;
-	float blueChannel = blueTexture.b;
-	
-	//Make new float4 combining each new altered colour channel
-	float4 chromaticAberrationColour = float4(redChannel, greenChannel, blueChannel, 1);
-	
-	//---------------------------------------------------------------------------------------------------
-	//COMBINE CHROMATIC ABERRATION AND KUWAHARA FILTER
-	
-	//Control how much of each postFX you get by altering their weightings
-	float chromaticAberrationWeighting = 0.5f;
-	float kuwaharaWeighting = 1.0f - chromaticAberrationWeighting;
-	
-	//finalColour is a combination of chromatic aberration and the Kuwahara filter
-	//float4 finalColour = chromaticAberrationWeighting * chromaticAberrationColour +  kuwaharaWeighting * KuwaharaColour;
-	
-	//Just Kuwahara filter
+	//Return the colour of the pixel after being processsed by the Kuwahara filter
 	float4 finalColour = KuwaharaColour;
 	
 	if (KuwaharaStrength > 0)
@@ -156,7 +129,7 @@ float4 CombineMainPS(float4 SvPosition : SV_POSITION) : SV_Target0
 		return finalColour;
 	}
 	
-	//returns original image without post processing 
+	//Returns original image without post processing 
 	return Texture2DSample(InputTexture, InputSampler, UV);
 	
 }
